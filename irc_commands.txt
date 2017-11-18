@@ -1,0 +1,12 @@
+test|test output
+chatgame|Chat game now available type !hanoi for more info
+tasmania|TASMania is the quest to publish Tool-Assisted Speed runs for all 714 Nintendo licensed US / PAL game-carts. https://docs.google.com/spreadsheets/d/14mIIGHU4hzK1atRsVgMtwc8hNkUc2Ty48loCNj8O9Bc/edit?usp=sharing
+tas|TAS is a Tool-Assisted Speedrun. A recorded movie of a super-human play through. See http|//tasvideos.org
+vote|Please vote for Alfred Chicken! TASVideos acceptance is based on feedback (non-lurker status [4 forum posts] required for voting)
+whodat|The8bitnerd (twitch.tv/The8bitnerd)
+who|The8bitnerd (twitch.tv/The8bitnerd)
+spreadsheet|https://docs.google.com/spreadsheets/d/14mIIGHU4hzK1atRsVgMtwc8hNkUc2Ty48loCNj8O9Bc
+shit|The Scrubbingly Hygenic Invitational Tournament (SHIT) game is NES Tiny Toon Adventures.
+bits|Bits, while not necessary, are appreciated. Graphical widget coming soon!
+key|Red=unfinished, black=finished, yellow=capable, green=confident
+big20|A Race through 20 games! http://thebestofnes.com/big20
