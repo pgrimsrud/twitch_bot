@@ -1,5 +1,6 @@
 # coding: utf-8
 #IRC BOT
+# port 8100
 
 import sys
 import socket
@@ -13,6 +14,56 @@ import urllib2
 import json
 import select
 import time
+import BaseHTTPServer
+import cgi
+from urlparse import urlparse
+
+SERVER_IP = "Redacted client IP"
+EXTERNAL_IP = "Redacted external facing IP"
+EXTERNAL_ADDRESS = "http://" + EXTERNAL_IP
+SERVER_PORT = "8100"
+SECRET = "requested by bitNES"
+
+class TwitchRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
+    def do_POST(self):
+        header = self.headers.items()
+        print("Header:\n")
+        print(header)
+        length = self.headers.getheader('content-length')
+        data = self.rfile.read(int(length))
+        jsondata = json.loads(data)
+        print(jsondata)
+        print("ID %s\n" % jsondata['data']['from_id'])
+        print("New Follower %s\n" % GetDisplayName(jsondata['data']['from_id']))
+        self.send_response(200)
+        self.end_headers()
+
+    def do_GET(self):
+        header = self.headers.items()
+        data = cgi.parse_qs(urlparse(self.path).query)
+        print("Header:\n")
+        print(header)
+        print("Data:\n")
+        print(data)
+        print("Address:\n")
+        print(self.client_address)
+        print("Path:\n")
+        print(self.path)
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(data['hub.challenge'][0])
+        
+
+class HttpThread (threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+
+
+    def run(self):
+        httpd = BaseHTTPServer.HTTPServer((SERVER_IP, int(SERVER_PORT)), TwitchRequestHandler)
+        print "Starting HTTP server\n"
+        httpd.serve_forever()
+
 
 buff = ""
 lines = ""
@@ -758,7 +809,7 @@ class IrcThread (threading.Thread):
             dataReady = select.select([s], [], [], 0)
             if dataReady[0]:
                 try:
-                    buff = buff + dataReady[0][0].recv(256).decode('utf-8')
+                    buff = buff + dataReady[0][0].recv(4096).decode('utf-8', "ignore")
                     print(buff).encode(sys.stdout.encoding, errors='replace')
                     lines = buff.split("\n")
                     buff = lines.pop()
@@ -1310,6 +1361,23 @@ s.send("PRIVMSG #link_7777 :bot has joined\r\n".encode())
 irc_thread = IrcThread()
 irc_thread.start()
 
+http_thread = HttpThread()
+http_thread.start()
+
+def RequestFollowerNotifications():
+    info = { 'hub.callback': EXTERNAL_ADDRESS + ":" + SERVER_PORT,
+             'hub.mode': 'subscribe',
+             'hub.topic': 'https://api.twitch.tv/helix/users/follows?to_id=' + USER_ID,
+             'hub.lease_seconds': '300',
+             'hub.secret': SECRET}
+    data = urllib.urlencode(info)
+    req = urllib2.Request('https://api.twitch.tv/helix/webhooks/hub', data)
+    req.add_header('Client-ID',CLIENT_ID)
+    req.get_method = lambda: 'POST'
+    res = urllib2.urlopen(req)
+    print res.read()
+    print "Requested follower notifications\n"
+    
 
 def UpdateChannel(info):
     data = urllib.urlencode(info)
@@ -1328,20 +1396,25 @@ def UpdateGame(newGame):
     channel = json.loads(UpdateChannel({'channel[game]' : newGame}))
     s.send(("PRIVMSG #link_7777 :Game Changed to %s\r\n" % (channel["game"])).encode())
 
-def getChannelByID():
-    req = urllib2.Request('https://api.twitch.tv/kraken/channels/' + USER_ID)
+def getChannelByID(userID):
+    req = urllib2.Request('https://api.twitch.tv/kraken/channels/' + userID)
     req.add_header('Accept','application/vnd.twitchtv.v5+json')
-    req.add_header('Client-ID',CLIENT_ID)
+    req.add_header('Client-ID', CLIENT_ID)
     res = urllib2.urlopen(req)
     return res.read()
 
 def GetGame():
-    channel = json.loads(getChannelByID())
+    channel = json.loads(getChannelByID(USER_ID))
     s.send(("PRIVMSG #link_7777 :Current Game: %s\r\n" % (channel["game"])).encode())
     
 def GetTitle():
-    channel = json.loads(getChannelByID())
+    channel = json.loads(getChannelByID(USER_ID))
     s.send(("PRIVMSG #link_7777 :Current Title: %s\r\n" % (channel["status"])).encode())
+
+def GetDisplayName(userID):
+    channel = json.loads(getChannelByID(userID))
+    print(channel)
+    return channel["display_name"]
 
 def GetStream():
     req = urllib2.Request('https://api.twitch.tv/kraken/streams/' + USER_ID)
@@ -1390,6 +1463,7 @@ def LogBits(epoch, user, count):
 #res = urllib2.urlopen(req)
 #print(res.read())
 
+
 LoadBitInfo()
 
 pygame.init()
@@ -1400,6 +1474,8 @@ screen = pygame.display.set_mode((350,112)) #create a screen
 
 bitnes = BitNesCollection(bitInfo['link_7777_total_bits'])
 
+RequestFollowerNotifications()
+
 while 1:
     clock.tick(8)
     bitnes.outstanding_bits_check()
@@ -1407,8 +1483,10 @@ while 1:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             irc_thread._Thread__stop()
+            http_thread._Thread__stop()
             quit()
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 irc_thread._Thread__stop()
+                http_thread._Thread__stop()
                 quit()
