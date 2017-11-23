@@ -16,6 +16,7 @@ import select
 import time
 import BaseHTTPServer
 import cgi
+import random
 from urlparse import urlparse
 
 SERVER_IP = "Redacted client IP"
@@ -26,6 +27,8 @@ SECRET = "requested by bitNES"
 
 class TwitchRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
     def do_POST(self):
+        global bitnes
+
         header = self.headers.items()
         print("Header:\n")
         print(header)
@@ -35,6 +38,7 @@ class TwitchRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         print(jsondata)
         print("ID %s\n" % jsondata['data']['from_id'])
         print("New Follower %s\n" % GetDisplayName(jsondata['data']['from_id']))
+        bitnes.add_notification(GetDisplayName(jsondata['data']['from_id']))
         self.send_response(200)
         self.end_headers()
 
@@ -845,7 +849,7 @@ class IrcThread (threading.Thread):
 
                 match = re.search('\:\!commands', line)
                 if match:
-                    message = "PRIVMSG #link_7777 :Commands: !new !title !time !left !remaining"
+                    message = "PRIVMSG #link_7777 :Commands: !new !title !time !left !remaining !mute !unmute"
 
                     command_list = open("irc_commands.txt")
                     for cmd in command_list.readlines():
@@ -887,6 +891,14 @@ class IrcThread (threading.Thread):
                 if match:
                     bitnes.add_bits(match.group(1), int(match.group(2)), 1)
 
+                match = re.search('\!link_7777\@.*\:\!mute', line)
+                if match:
+                    bitnes.mute()
+
+                match = re.search('\!link_7777\@.*\:\!unmute', line)
+                if match:
+                    bitnes.unmute()
+
                 match = re.search('\:\!left', line)
                 if match:
                     tmp_line = "PRIVMSG #link_7777 :%d bits remaining (%d/%d)\r\n" % (bitnes.get_current_image_count() - bitnes.get_current_partial_count(),bitnes.get_current_partial_count(),bitnes.get_current_image_count())
@@ -909,6 +921,15 @@ class BitNesCollection:
         self.alertText = ''
         self.alertBits = 0
         self.alertQueue = []
+        self.notificationFont = pygame.font.SysFont("DejaVu Sans Monospace", 40)
+        self.notificationTimeout = 0
+        self.notificationText = ''
+        self.notificationQueue = []
+        self.notificationAnimationFlag = 0;
+        self.notificationAnimationCurrentHeight = 0
+        self.notificationAnimationCurrentWidth = 0
+        self.notificationAnimationCurrentX = 0
+        self.notificationAnimationCurrentY = 0
         pygame.mixer.music.load("C:\Users\omx\NES\\bot\img\Purple.mp3")
         self.moves = 0
         #self.pixelImage = pygame.image.load("C:\Users\omx\NES\Layouts\Battletoads.bmp")
@@ -919,6 +940,7 @@ class BitNesCollection:
         self.currentBits = initialCount
         self.currentPartialBits = 0
         self.max_height = 0
+        self.max_overall_height = 0
         #self.create_ghost(self.pixelGhostImage, self.currentBits)
         self.outstandingBits = 0
         self.previousBits = 0
@@ -938,24 +960,38 @@ class BitNesCollection:
         self.bitImageSmall = pygame.image.load("C:\Users\omx\NES\\bot\img\\bit_small.png")
         self.load_images()
         #self.background = ()
-        #background = pygame.Surface(screen.get_size())
-        #background.fill((0,0,0))
-        #background = background.convert() #makes blitting faster
+        self.notification_background = pygame.Surface((350,self.max_overall_height*2 + self.alertFont.size("A")[1]*2 + 4))
+        self.notification_background.fill((25,25,0))
+        self.notification_background = self.notification_background.convert() #makes blitting faster
+        self.notificationAnimationImage = NesImageLibrary[self.currentImageIndex]['image'].copy()
+        self.randomImageNum = 0
+        self.muted = 0
 
         #screen.blit(background, (0,0))
         self.draw()
 
+    def mute(self):
+        self.muted = 1
+
+    def unmute(self):
+        self.muted = 0
+
     def add_bits(self, name, bits, test):
         self.bitsQueue.append((name, bits, test))
         self.alertQueue.append((name, bits))
+
+    def add_notification(self, text):
+        print("Append %s\n" % text)
+        self.notificationQueue.append(text)
         
     def outstanding_bits_check(self):
         if self.alertTimeout == 0:
             if len(self.alertQueue) > 0:
                 (self.alertText,self.alertBits) = self.alertQueue.pop(0)
                 self.alertTimeout = 20*8
-                #pygame.mixer.music.load("C:\Users\omx\NES\\bot\img\Purple.mp3")
-                #pygame.mixer.music.play()
+                if(self.muted == 0):
+                    pygame.mixer.music.load("C:\Users\omx\NES\\bot\img\Purple.mp3")
+                    pygame.mixer.music.play()
         #else:
         #    if self.animationFlag == 0:
         #        #still call do animation if in case the animation is done before the alert
@@ -978,6 +1014,17 @@ class BitNesCollection:
                     if self.testMode == 1:
                         self.preTestBits = self.currentBits
 
+    def outstanding_notification_check(self):
+        if self.notificationTimeout == 0:
+            if len(self.notificationQueue) > 0:
+                self.notificationText = self.notificationQueue.pop(0)
+                self.notificationTimeout = 30*8
+                print("Notification\n")
+                if(self.muted == 0):
+                    pygame.mixer.music.load("C:\Users\omx\NES\\bot\img\Purple.mp3")
+                    pygame.mixer.music.play()
+                self.notification_animation_start()
+
     def animation_start(self):
         self.load_images()
         self.animationImage = NesImageLibrary[self.currentImageIndex]['image'].copy()
@@ -990,12 +1037,33 @@ class BitNesCollection:
         self.animationFlag = 1
         self.draw()
 
+    def notification_animation_start(self):
+        self.load_images()
+        self.randomImageNum = random.randrange(0,NesImageCount-1)
+        NesImageLibrary[self.randomImageNum]['image'] = pygame.image.load(NesImageLibrary[self.randomImageNum]['file'])
+        NesImageLibrary[self.randomImageNum]['image'].set_colorkey((0,0,0,255))
+        self.notificationAnimationImage = pygame.transform.scale(NesImageLibrary[self.randomImageNum]['image'].copy(), (NesImageLibrary[self.randomImageNum]['image'].get_width()*2, NesImageLibrary[self.randomImageNum]['image'].get_height()*2))
+        self.notificationAnimationCurrentHeight = self.notificationAnimationImage.get_height()
+        self.notificationAnimationCurrentWidth = self.notificationAnimationImage.get_width()
+        self.notificationAnimationCurrentX = (350-self.notificationAnimationCurrentWidth)/2
+        self.notificationAnimationCurrentY = (self.max_overall_height*2 - self.notificationAnimationCurrentHeight)/2+self.max_height+50
+        self.notificationAnimationFlag = 1
+        self.draw()
+
     def do_animation(self):
         if self.animationFlag == 1:
             self.animation_reduce_size()
         if self.alertTimeout > 0:
             self.alertTimeout = self.alertTimeout - 1
             if self.animationFlag == 0:
+                self.draw()
+
+    def do_notification_animation(self):
+        if self.notificationTimeout > 0:
+            self.notificationTimeout = self.notificationTimeout - 1
+            if self.notificationTimeout == 0:
+                self.notificationAnimationFlag = 0
+            if self.notificationAnimationFlag == 0:
                 self.draw()
 
     def animation_reduce_size(self):
@@ -1226,7 +1294,7 @@ class BitNesCollection:
                 self.max_height = NesImageLibrary[self.currentImageIndex+2]['image'].get_height()
         self.animationImage = NesImageLibrary[self.currentImageIndex]['image'].copy()
         self.set_animation_image((0,0,0))
-        screen = pygame.display.set_mode((350,self.max_height+50))
+        screen = pygame.display.set_mode((350,self.max_height+50+self.max_overall_height*2 + self.alertFont.size("A")[1]*2 + 4))
 
     def get_pixel_count(self, image):
         width = image.get_width()
@@ -1248,6 +1316,8 @@ class BitNesCollection:
             currentImage = pygame.image.load(NesImageLibrary[i]['file'])
             image_count = self.get_pixel_count(currentImage)
             NesImageLibrary[i]['pixels'] = image_count
+            if currentImage.get_height() > self.max_overall_height:
+                self.max_overall_height = currentImage.get_height()
             total_count = total_count + image_count
             print("%d %d %d %s" % (i, image_count, total_count, NesImageLibrary[i]['name']))
         
@@ -1278,7 +1348,7 @@ class BitNesCollection:
                         break
                 break
 
-    def draw(self):
+    def drawBitNes(self):
         screen.fill(self.bgcolor)
         screen.blit(self.font.render("NES", True, (255,0,0)).convert_alpha(), (108, 2))
         screen.blit(self.font.render("Bit", True, (190,99,255)).convert_alpha(), (108+32, 2))
@@ -1306,6 +1376,20 @@ class BitNesCollection:
             screen.blit(self.font.render(self.outstandingName, True, (255,255,255)).convert_alpha(), (350/2 - tmpSize[0]/2 - 7 - 3 - tmpSize2[0]/2, self.max_height+20+tmpSize[1]))
             screen.blit(self.bitImageSmall, (350/2 - tmpSize[0]/2 - 7 - 3 - tmpSize2[0]/2 + tmpSize[0] + 3, self.max_height + 20 + tmpSize[1]))
             screen.blit(self.font.render(str(displayBits), True, (190,99,255)).convert_alpha(), (350/2 - tmpSize[0]/2 - 7 - 3 - tmpSize2[0]/2 + tmpSize[0] + 14 + 6, self.max_height+20+tmpSize[1]))
+
+    def drawNotifications(self):
+        screen.blit(self.notification_background, (0,self.max_height+50))
+        if self.notificationTimeout > 0:
+            screen.blit(self.notificationAnimationImage, (self.notificationAnimationCurrentX,self.notificationAnimationCurrentY))
+            followText = "is now following!"
+            tmpSize = self.alertFont.size(self.notificationText)
+            tmpSize2 = self.alertFont.size(followText)
+            screen.blit(self.alertFont.render(self.notificationText, True, (255,255,255)).convert_alpha(), ((350-tmpSize[0])/2, self.notificationAnimationCurrentY+self.notificationAnimationImage.get_height()+2))
+            screen.blit(self.alertFont.render(followText, True, (255,255,255)).convert_alpha(), ((350-tmpSize2[0])/2, self.notificationAnimationCurrentY+self.notificationAnimationImage.get_height()+tmpSize[1]+4))
+
+    def draw(self):
+        self.drawBitNes()
+        self.drawNotifications()
         pygame.display.flip()
 
     def displayNesImages(self):
@@ -1470,7 +1554,7 @@ pygame.init()
 
 clock = pygame.time.Clock()
 
-screen = pygame.display.set_mode((350,112)) #create a screen
+screen = pygame.display.set_mode((350,0)) #create a screen
 
 bitnes = BitNesCollection(bitInfo['link_7777_total_bits'])
 
@@ -1479,7 +1563,9 @@ RequestFollowerNotifications()
 while 1:
     clock.tick(8)
     bitnes.outstanding_bits_check()
+    bitnes.outstanding_notification_check()
     bitnes.do_animation()
+    bitnes.do_notification_animation()
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             irc_thread._Thread__stop()
