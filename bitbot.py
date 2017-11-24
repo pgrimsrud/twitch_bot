@@ -17,6 +17,7 @@ import time
 import BaseHTTPServer
 import cgi
 import random
+import smtplib
 from urlparse import urlparse
 
 SERVER_IP = "Redacted client IP"
@@ -81,6 +82,22 @@ APP_NAME = "link_7777"
 USER_ID = "Redacted user ID (number)"
 CLIENT_ID = "Redacted client ID (hash)"
 ACCESS_TOKEN = "Redacted access token (hash)"
+
+LiveAlertTimeout = 300*8
+LiveAlertListLength = 11
+LiveAlertList = [0 for i in range(LiveAlertListLength)]
+LiveAlertList[0] =  {'game':'Star Wars: The Empire Strikes Back'}
+LiveAlertList[1] =  {'game':'Time Lord'}
+LiveAlertList[2] =  {'game':'Legend of the Ghost Lion'}
+LiveAlertList[3] =  {'game':'Barbie'}
+LiveAlertList[4] =  {'game':'Pwn Adventure Z'}
+LiveAlertList[5] =  {'game':'Track & Field II'}
+LiveAlertList[6] =  {'game':'Town & Country Surf Designs: Wood & Water Rage'}
+LiveAlertList[7] =  {'game':"Town & Country Surf Designs II: Thrilla's Surfari"}
+LiveAlertList[8] =  {'game':'Raid on Bungeling Bay'}
+LiveAlertList[9] =  {'game':'Alfred Chicken'}
+LiveAlertList[10] = {'game':'Super Glove Ball'}
+#LiveAlertList[11] = {'game':'Zelda II: The Adventure of Link'}
 
 NesImageCount = 177
 NesImageLibrary = [0 for i in range(NesImageCount)]
@@ -966,9 +983,16 @@ class BitNesCollection:
         self.notificationAnimationImage = NesImageLibrary[self.currentImageIndex]['image'].copy()
         self.randomImageNum = 0
         self.muted = 0
+        self.subscriptionTimeout = 604800*8
 
         #screen.blit(background, (0,0))
         self.draw()
+
+    def subscriptionTick(self):
+        self.subscriptionTimeout -= 1
+        if self.subscriptionTimeout == 0:
+            RequestFollowerNotifications()
+            self.subscriptionTimeout = 604800*8
 
     def mute(self):
         self.muted = 1
@@ -1452,7 +1476,7 @@ def RequestFollowerNotifications():
     info = { 'hub.callback': EXTERNAL_ADDRESS + ":" + SERVER_PORT,
              'hub.mode': 'subscribe',
              'hub.topic': 'https://api.twitch.tv/helix/users/follows?to_id=' + USER_ID,
-             'hub.lease_seconds': '300',
+             'hub.lease_seconds': '604800',
              'hub.secret': SECRET}
     data = urllib.urlencode(info)
     req = urllib2.Request('https://api.twitch.tv/helix/webhooks/hub', data)
@@ -1541,6 +1565,61 @@ def LogBits(epoch, user, count):
     bitLog.write(epoch + ", " + user + ", " + count + "\n")
     bitLog.close()
 
+def SearchGame(game):
+    req = urllib2.Request('https://api.twitch.tv/kraken/search/streams?query=' + urllib.quote_plus(game))
+    req.add_header('Accept','application/vnd.twitchtv.v5+json')
+    req.add_header('Client-ID',CLIENT_ID)
+    res = urllib2.urlopen(req)
+    return json.loads(res.read())
+
+def LiveAlertCheck():
+    global LiveAlertTimeout
+    LiveAlertMessage = ''
+    LiveAlertTimeout -= 1
+    if LiveAlertTimeout == 0:
+        global LiveAlertList
+        LiveAlertTimeout = 300*8
+        for i in range(0,LiveAlertListLength):
+            theGame = LiveAlertList[i]
+            tmpLiveList = {}
+            print(theGame['game'])
+            search_result = SearchGame(theGame['game'])
+            #print(search_result['streams'])
+            #if 'channel' in search_result:
+            for chan in search_result['streams']:
+                #print(chan)
+                if repr(theGame['game']) == repr(chan['channel']['game']):
+                    tmpLiveList[chan['channel']['display_name']] = chan['channel']['game']
+                    print("%s %s\n" % (repr(chan['channel']['display_name']), repr(chan['channel']['game'])))
+            for name in tmpLiveList:
+                #print("LiveAlertList:")
+                #print(LiveAlertList)
+                if not 'live' in LiveAlertList[i] or not name in LiveAlertList[i]['live']:
+                    LiveAlertMessage = LiveAlertMessage + name + ' is playing ' + tmpLiveList[name] + "\n"
+                    #print("Message:")
+                    #print(LiveAlertMessage
+            LiveAlertList[i]['live'] = tmpLiveList
+    if LiveAlertMessage != '':
+        SendLiveAlertMessage(LiveAlertMessage)
+
+def SendLiveAlertMessage(message):
+    try:
+        smtp_ssl = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        smtp_ssl.ehlo()
+        smtp_ssl.login("Redacted email","Redacted password")
+        smtp_ssl.sendmail("Redacted email","Redacted email","Subject: bitNES Live Alert\n\n " + message)
+        smtp_ssl.close()
+        print("email sent")
+    except:
+        error = sys.exc_info()[0]
+        print("email NOT sent: " + repr(error))
+
+LiveAlertTimeout = 1
+LiveAlertCheck()
+#searchResults = SearchGame('Super Glove Ball')
+#for chan in searchResults['streams']:
+#    print("%s %s\n" % (chan['channel']['display_name'], chan['channel']['game']))
+
 #req = urllib2.Request('https://api.twitch.tv/kraken/search/channels?query=zelda')
 #req.add_header('Accept','application/vnd.twitchtv.v5+json')
 #req.add_header('Client-ID',CLIENT_ID)
@@ -1566,6 +1645,8 @@ while 1:
     bitnes.outstanding_notification_check()
     bitnes.do_animation()
     bitnes.do_notification_animation()
+    bitnes.subscriptionTick()
+    LiveAlertCheck()
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             irc_thread._Thread__stop()
