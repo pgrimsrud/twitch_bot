@@ -816,6 +816,41 @@ NesImageLibrary[176] = {'name':'Disney\'s The Little Mermaid',                  
 #NesImageLibrary[712] = {'name':'Zoda's Revenge: StarTropics II',                              'file':'C:\Users\omx\NES\\bot\img\\713.bmp',    'pixels':0}
 #NesImageLibrary[713] = {'name':'Zombie Nation',                                               'file':'C:\Users\omx\NES\\bot\img\\714.bmp',    'pixels':0}
 
+class SearchThread (threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+
+    def run(self):
+        while 1:
+            global LiveAlertTimeout
+            time.sleep(1)
+            LiveAlertMessage = ''
+            if LiveAlertTimeout <= 0:
+                global LiveAlertList
+                LiveAlertTimeout = 300*8
+                for i in range(0,LiveAlertListLength):
+                    theGame = LiveAlertList[i]
+                    tmpLiveList = {}
+                    print(theGame['game'])
+                    search_result = SearchGame(theGame['game'])
+                    #print(search_result['streams'])
+                    #if 'channel' in search_result:
+                    for chan in search_result['streams']:
+                        #print(chan)
+                        if repr(theGame['game']) == repr(chan['channel']['game']):
+                            tmpLiveList[chan['channel']['display_name']] = chan['channel']['game']
+                            print("%s %s\n" % (repr(chan['channel']['display_name']), repr(chan['channel']['game'])))
+                    for name in tmpLiveList:
+                        #print("LiveAlertList:")
+                        #print(LiveAlertList)
+                        if not 'live' in LiveAlertList[i] or not name in LiveAlertList[i]['live']:
+                            LiveAlertMessage = LiveAlertMessage + name + ' is playing ' + tmpLiveList[name] + "\n"
+                            #print("Message:")
+                            #print(LiveAlertMessage
+                    LiveAlertList[i]['live'] = tmpLiveList
+            if LiveAlertMessage != '':
+                SendLiveAlertMessage(LiveAlertMessage)
+
 class IrcThread (threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
@@ -1472,6 +1507,9 @@ irc_thread.start()
 http_thread = HttpThread()
 http_thread.start()
 
+search_thread = SearchThread()
+search_thread.start()
+
 def RequestFollowerNotifications():
     info = { 'hub.callback': EXTERNAL_ADDRESS + ":" + SERVER_PORT,
              'hub.mode': 'subscribe',
@@ -1574,33 +1612,7 @@ def SearchGame(game):
 
 def LiveAlertCheck():
     global LiveAlertTimeout
-    LiveAlertMessage = ''
     LiveAlertTimeout -= 1
-    if LiveAlertTimeout == 0:
-        global LiveAlertList
-        LiveAlertTimeout = 300*8
-        for i in range(0,LiveAlertListLength):
-            theGame = LiveAlertList[i]
-            tmpLiveList = {}
-            print(theGame['game'])
-            search_result = SearchGame(theGame['game'])
-            #print(search_result['streams'])
-            #if 'channel' in search_result:
-            for chan in search_result['streams']:
-                #print(chan)
-                if repr(theGame['game']) == repr(chan['channel']['game']):
-                    tmpLiveList[chan['channel']['display_name']] = chan['channel']['game']
-                    print("%s %s\n" % (repr(chan['channel']['display_name']), repr(chan['channel']['game'])))
-            for name in tmpLiveList:
-                #print("LiveAlertList:")
-                #print(LiveAlertList)
-                if not 'live' in LiveAlertList[i] or not name in LiveAlertList[i]['live']:
-                    LiveAlertMessage = LiveAlertMessage + name + ' is playing ' + tmpLiveList[name] + "\n"
-                    #print("Message:")
-                    #print(LiveAlertMessage
-            LiveAlertList[i]['live'] = tmpLiveList
-    if LiveAlertMessage != '':
-        SendLiveAlertMessage(LiveAlertMessage)
 
 def SendLiveAlertMessage(message):
     try:
@@ -1651,9 +1663,11 @@ while 1:
         if event.type == pygame.QUIT:
             irc_thread._Thread__stop()
             http_thread._Thread__stop()
+            search_thread._Thread__stop()
             quit()
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
                 irc_thread._Thread__stop()
                 http_thread._Thread__stop()
+                search_thread._Thread__stop()
                 quit()
