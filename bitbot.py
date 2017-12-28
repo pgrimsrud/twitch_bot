@@ -39,7 +39,9 @@ class TwitchRequestHandler(BaseHTTPServer.BaseHTTPRequestHandler):
         print(jsondata)
         print("ID %s\n" % jsondata['data']['from_id'])
         print("New Follower %s\n" % GetDisplayName(jsondata['data']['from_id']))
-        bitnes.add_notification(GetDisplayName(jsondata['data']['from_id']))
+        bitnes.add_notification([GetDisplayName(jsondata['data']['from_id']), "is now following!"])
+        follow_message = "PRIVMSG #link_7777 :%s is now following!\r\n" % (GetDisplayName(jsondata['data']['from_id']))
+        s.send(follow_message.encode())
         self.send_response(200)
         self.end_headers()
 
@@ -831,22 +833,23 @@ class SearchThread (threading.Thread):
                 for i in range(0,LiveAlertListLength):
                     theGame = LiveAlertList[i]
                     tmpLiveList = {}
-                    print(theGame['game'])
+                    #print(theGame['game'])
                     search_result = SearchGame(theGame['game'])
                     #print(search_result['streams'])
                     #if 'channel' in search_result:
-                    for chan in search_result['streams']:
-                        #print(chan)
-                        if repr(theGame['game']) == repr(chan['channel']['game']):
-                            tmpLiveList[chan['channel']['display_name']] = chan['channel']['game']
-                            print("%s %s\n" % (repr(chan['channel']['display_name']), repr(chan['channel']['game'])))
-                    for name in tmpLiveList:
-                        #print("LiveAlertList:")
-                        #print(LiveAlertList)
-                        if not 'live' in LiveAlertList[i] or not name in LiveAlertList[i]['live']:
-                            LiveAlertMessage = LiveAlertMessage + name + ' is playing ' + tmpLiveList[name] + "\n"
-                            #print("Message:")
-                            #print(LiveAlertMessage
+                    if 'streams' in search_result:
+                        for chan in search_result['streams']:
+                            #print(chan)
+                            if repr(theGame['game']) == repr(chan['channel']['game']):
+                                tmpLiveList[chan['channel']['display_name']] = chan['channel']['game']
+                                #print("%s %s\n" % (repr(chan['channel']['display_name']), repr(chan['channel']['game'])))
+                        for name in tmpLiveList:
+                            #print("LiveAlertList:")
+                            #print(LiveAlertList)
+                            if not 'live' in LiveAlertList[i] or not name in LiveAlertList[i]['live']:
+                                LiveAlertMessage = LiveAlertMessage + name + ' is playing ' + tmpLiveList[name] + "\n"
+                                #print("Message:")
+                                #print(LiveAlertMessage
                     LiveAlertList[i]['live'] = tmpLiveList
             if LiveAlertMessage != '':
                 SendLiveAlertMessage(LiveAlertMessage)
@@ -880,6 +883,26 @@ class IrcThread (threading.Thread):
             for line in lines:
                 line = line.rstrip()
 
+                meta_dict = dict()
+                header = ''
+                data = ''
+                if line[0] == '@':
+                    line = line[1:]
+                    index = line.find(":")
+                    index2 = line.find("#link_7777")
+                    #index2 = line.find("#themexicanrunner")
+                    meta = line[0:index]
+                    header = line[index+1:index2]
+                    data = line[index2+12:]
+                    #data = line[index2+19:]
+                    #print("message meta -> '%s'" % meta).encode(sys.stdout.encoding, errors='replace')
+                    #print("message header -> '%s'" % header).encode(sys.stdout.encoding, errors='replace')
+                    #print("message data -> '%s'" % data).encode(sys.stdout.encoding, errors='replace')
+
+                    meta_dict = dict(info.split('=') for info in meta.split(';'))
+
+                    #print(meta_dict)
+
                 command_list = open("irc_commands.txt")
                 for cmd in command_list.readlines():
                     tmp = cmd.split("|")
@@ -892,16 +915,55 @@ class IrcThread (threading.Thread):
                 if match:
                     s.send("PONG :tmi.twitch.tv\r\n".encode())
 
-                match = re.search('^@badges.*;bits=(.+?);.*display-name=(.+?);.*sent-ts=(.+?);.*PRIVMSG #link_7777\s+?:(.*)', line)
-                #match = re.search('^@badges.*;.*display-name=(.*);emotes.*PRIVMSG #link_7777 :bits=(.*);(.*)', line)
-                if match:
-                    message = "PRIVMSG #link_7777:" + match.group(2) + " thank you for the " + match.group(1) + " bits!\r\n"
+                if 'bits' in meta_dict:
+                    message = "PRIVMSG #link_7777:" + meta_dict['display-name'] + " thank you for the " + meta_dict['bits'] + " bits!\r\n"
                     s.send(message.encode())
-                    UpdateBits(match.group(3), match.group(2), int(match.group(1)))
+                    if 'sent-ts' in meta_dict:
+                        #print('sent-ts')
+                        UpdateBits(meta_dict['sent-ts'], meta_dict['display-name'], int(meta_dict['bits']))
+                    elif 'tmi-sent-ts' in meta_dict:
+                        #print('tmi-sent-ts')
+                        UpdateBits(meta_dict['tmi-sent-ts'], meta_dict['display-name'], int(meta_dict['bits']))
+                    else:
+                        #print('none')
+                        UpdateBits('0', meta_dict['display-name'], int(meta_dict['bits']))
 
-                match = re.search('\:\!commands', line)
+                match = re.search('jtv\!.*link_7777 :(.*) is now auto.*to (.*) viewers', line)
                 if match:
-                    message = "PRIVMSG #link_7777 :Commands: !new !title !time !left !remaining !mute !unmute"
+                    #print(match.group(0))
+                    bitnes.host_alert(match.group(1), int(match.group(2)), True)
+                match = re.search('jtv\!.*link_7777 :(.*) is now host.*to (.*) viewers', line)
+                if match:
+                    #print(match.group(0))
+                    bitnes.host_alert(match.group(1), int(match.group(2)), False)
+                match = re.search('jtv\!.*link_7777 :(.*) is now hosting you\.', line)
+                if match:
+                    #print(match.group(0))
+                    bitnes.host_alert(match.group(1), 0, False)
+
+                if 'msg-id' in meta_dict:
+                    if meta_dict['msg-id'] == 'sub' or meta_dict['msg-id'] == 'resub':
+                        subList = [meta_dict['display-name'], "is now a " + meta_dict['msg-param-months'] + " month", "subscriber "]
+                        if meta_dict['msg-param-sub-plan'] == 'Prime':
+                            subList[2] += "with Prime"
+                        if meta_dict['msg-param-sub-plan'] == '1000':
+                            subList[2] += "at $4.99"
+                        if meta_dict['msg-param-sub-plan'] == '2000':
+                            subList[2] += "at $9.99"
+                        if meta_dict['msg-param-sub-plan'] == '3000':
+                            subList[2] += "at $24.99"
+                        bitnes.add_notification(subList)
+                    if meta_dict['msg-id'] == 'raid':
+                        bitnes.add_notification([meta_dict['display-name'], meta_dict['msg-param-viewerCount'] + " viewer RAID!"])
+                    #if meta_dict['msg-id'] == 'ritual':
+                    #    new_chatter is the only valid value so far, which seems useless
+                    
+                if data == '':
+                    continue
+
+                match = re.search('^\!commands', data)
+                if match:
+                    message = "PRIVMSG #link_7777 :Commands: !new !title !time !left !remaining !mute !unmute !host !unhost !notification"
 
                     command_list = open("irc_commands.txt")
                     for cmd in command_list.readlines():
@@ -912,7 +974,7 @@ class IrcThread (threading.Thread):
 
                     s.send(message.encode())
 
-                match = re.search('\:\!time', line)
+                match = re.search('^\!time', data)
                 if match:
                     start_time = GetTime()
                     if start_time == None:
@@ -920,43 +982,63 @@ class IrcThread (threading.Thread):
                     else:
                         s.send("PRIVMSG #link_7777 :This stream has been live since " + start_time + "\r\n".encode())
 
-                match = re.search('\!link_7777\@.*\:\!title\s(.*)', line)
-                if match:
-                    UpdateTitle(match.group(1))
-                else:
-                    match = re.search('\:\!title', line)
+                if 'display-name' in meta_dict and meta_dict['display-name'] == 'link_7777':
+                    #Restricted commands
+
+                    match = re.search('^\!title\s(.*)', data)
+                    if match and meta_dict['display-name'] == 'link_7777':
+                        UpdateTitle(match.group(1))
+
+                    match = re.search('^\!game\s(.*)', data)
                     if match:
-                        GetTitle()
+                        if match.group(1) == 'Z2':
+                            UpdateGame('Zelda II: The Adventure of Link')
+                        else:
+                            UpdateGame(match.group(1))
 
-                match = re.search('\!link_7777\@.*\:\!game\s(.*)', line)
-                if match:
-                    if match.group(1) == 'Z2':
-                        UpdateGame('Zelda II: The Adventure of Link')
-                    else:
-                        UpdateGame(match.group(1))
-                else:
-                    match = re.search('\:\!game', line)
+                    match = re.search('^!bittest\s(.*)\s(.*)', data)
                     if match:
-                        GetGame()
+                        bitnes.add_bits(match.group(1), int(match.group(2)), 1)
 
-                match = re.search('\!link_7777\@.*\:\!bittest\s(.*)\s(.*)', line)
+                    match = re.search('^!notification\s(.*)', data)
+                    if match:
+                        testList = match.group(1).split(',')
+                        bitnes.add_notification(testList)
+
+                    match = re.search('^\!mute', data)
+                    if match:
+                        bitnes.mute()
+                        s.send("PRIVMSG #link_7777 :Widget muted\r\n".encode())
+
+                    match = re.search('^\!unmute', data)
+                    if match:
+                        bitnes.unmute()
+                        s.send("PRIVMSG #link_7777 :Widget unmuted\r\n".encode())
+
+                    match = re.search('^\!host\s(.*)', data)
+                    if match:
+                        s.send("PRIVMSG #link_7777 :/host " + match.group(1) + "\r\n".encode())
+                        s.send("PRIVMSG #link_7777 :Now hosting " + match.group(1) + "\r\n".encode())
+
+                    match = re.search('^\!unhost', data)
+                    if match:
+                        s.send("PRIVMSG #link_7777 :/unhost\r\n".encode())
+                        s.send("PRIVMSG #link_7777 :Exited host mode\r\n".encode())
+
+                match = re.search('^\!title$', data)
                 if match:
-                    bitnes.add_bits(match.group(1), int(match.group(2)), 1)
+                    GetTitle()
 
-                match = re.search('\!link_7777\@.*\:\!mute', line)
+                match = re.search('^\!game$', data)
                 if match:
-                    bitnes.mute()
+                    GetGame()
 
-                match = re.search('\!link_7777\@.*\:\!unmute', line)
-                if match:
-                    bitnes.unmute()
-
-                match = re.search('\:\!left', line)
+                match = re.search('^\!left', data)
                 if match:
                     tmp_line = "PRIVMSG #link_7777 :%d bits remaining (%d/%d)\r\n" % (bitnes.get_current_image_count() - bitnes.get_current_partial_count(),bitnes.get_current_partial_count(),bitnes.get_current_image_count())
                     s.send(tmp_line.encode())
 
-                match = re.search('\:\!remaining', line)
+                match = re.search('^\!remaining', data)
                 if match:
                     tmp_line = "PRIVMSG #link_7777 :%d bits remaining (%d/%d)\r\n" % (bitnes.get_current_image_count() - bitnes.get_current_partial_count(),bitnes.get_current_partial_count(),bitnes.get_current_image_count())
                     s.send(tmp_line.encode())
@@ -975,7 +1057,7 @@ class BitNesCollection:
         self.alertQueue = []
         self.notificationFont = pygame.font.SysFont("DejaVu Sans Monospace", 40)
         self.notificationTimeout = 0
-        self.notificationText = ''
+        self.notificationTextlist = []
         self.notificationQueue = []
         self.notificationAnimationFlag = 0;
         self.notificationAnimationCurrentHeight = 0
@@ -1012,8 +1094,8 @@ class BitNesCollection:
         self.bitImageSmall = pygame.image.load("C:\Users\omx\NES\\bot\img\\bit_small.png")
         self.load_images()
         #self.background = ()
-        self.notification_background = pygame.Surface((350,self.max_overall_height*2 + self.alertFont.size("A")[1]*2 + 4))
-        self.notification_background.fill((25,25,0))
+        self.notification_background = pygame.Surface((350,self.max_overall_height + self.alertFont.size("A")[1]*2 + 4))
+        self.notification_background.fill((2,2,0))
         self.notification_background = self.notification_background.convert() #makes blitting faster
         self.notificationAnimationImage = NesImageLibrary[self.currentImageIndex]['image'].copy()
         self.randomImageNum = 0
@@ -1039,9 +1121,18 @@ class BitNesCollection:
         self.bitsQueue.append((name, bits, test))
         self.alertQueue.append((name, bits))
 
-    def add_notification(self, text):
-        print("Append %s\n" % text)
-        self.notificationQueue.append(text)
+    def add_notification(self, list):
+        self.notificationQueue.append(list)
+
+    def host_alert(self, name, viewers, auto):
+        hostList = [name]
+        if auto:
+            hostList.append("is now auto-hosting")
+        else:
+            hostList.append("is now hosting")
+        if viewers != 0:
+            hostList.append("for %d viewers" % (viewers))
+        self.add_notification(hostList)
         
     def outstanding_bits_check(self):
         if self.alertTimeout == 0:
@@ -1076,7 +1167,7 @@ class BitNesCollection:
     def outstanding_notification_check(self):
         if self.notificationTimeout == 0:
             if len(self.notificationQueue) > 0:
-                self.notificationText = self.notificationQueue.pop(0)
+                self.notificationTextList = self.notificationQueue.pop(0)
                 self.notificationTimeout = 30*8
                 print("Notification\n")
                 if(self.muted == 0):
@@ -1101,11 +1192,13 @@ class BitNesCollection:
         self.randomImageNum = random.randrange(0,NesImageCount-1)
         NesImageLibrary[self.randomImageNum]['image'] = pygame.image.load(NesImageLibrary[self.randomImageNum]['file'])
         NesImageLibrary[self.randomImageNum]['image'].set_colorkey((0,0,0,255))
-        self.notificationAnimationImage = pygame.transform.scale(NesImageLibrary[self.randomImageNum]['image'].copy(), (NesImageLibrary[self.randomImageNum]['image'].get_width()*2, NesImageLibrary[self.randomImageNum]['image'].get_height()*2))
+        self.notificationAnimationImage = NesImageLibrary[self.randomImageNum]['image'].copy()
         self.notificationAnimationCurrentHeight = self.notificationAnimationImage.get_height()
         self.notificationAnimationCurrentWidth = self.notificationAnimationImage.get_width()
         self.notificationAnimationCurrentX = (350-self.notificationAnimationCurrentWidth)/2
-        self.notificationAnimationCurrentY = (self.max_overall_height*2 - self.notificationAnimationCurrentHeight)/2+self.max_height+50
+        #self.notificationAnimationCurrentY = (self.max_overall_height - self.notificationAnimationCurrentHeight)/2+self.max_height+50
+        self.notificationAnimationCurrentY = self.max_height+20+14+4
+        self.notification_background.fill((0,0,0))
         self.notificationAnimationFlag = 1
         self.draw()
 
@@ -1122,6 +1215,7 @@ class BitNesCollection:
             self.notificationTimeout = self.notificationTimeout - 1
             if self.notificationTimeout == 0:
                 self.notificationAnimationFlag = 0
+                self.notification_background.fill((2,2,0))
             if self.notificationAnimationFlag == 0:
                 self.draw()
 
@@ -1353,7 +1447,7 @@ class BitNesCollection:
                 self.max_height = NesImageLibrary[self.currentImageIndex+2]['image'].get_height()
         self.animationImage = NesImageLibrary[self.currentImageIndex]['image'].copy()
         self.set_animation_image((0,0,0))
-        screen = pygame.display.set_mode((350,self.max_height+50+self.max_overall_height*2 + self.alertFont.size("A")[1]*2 + 4))
+        screen = pygame.display.set_mode((350,self.max_height+50+self.max_overall_height + self.alertFont.size("A")[1]*2 + 4))
 
     def get_pixel_count(self, image):
         width = image.get_width()
@@ -1439,12 +1533,14 @@ class BitNesCollection:
     def drawNotifications(self):
         screen.blit(self.notification_background, (0,self.max_height+50))
         if self.notificationTimeout > 0:
+            sizeList = [None] * len(self.notificationTextList)
+            for i in range(len(self.notificationTextList)):
+                sizeList[i] = self.alertFont.size(self.notificationTextList[i])
             screen.blit(self.notificationAnimationImage, (self.notificationAnimationCurrentX,self.notificationAnimationCurrentY))
-            followText = "is now following!"
-            tmpSize = self.alertFont.size(self.notificationText)
-            tmpSize2 = self.alertFont.size(followText)
-            screen.blit(self.alertFont.render(self.notificationText, True, (255,255,255)).convert_alpha(), ((350-tmpSize[0])/2, self.notificationAnimationCurrentY+self.notificationAnimationImage.get_height()+2))
-            screen.blit(self.alertFont.render(followText, True, (255,255,255)).convert_alpha(), ((350-tmpSize2[0])/2, self.notificationAnimationCurrentY+self.notificationAnimationImage.get_height()+tmpSize[1]+4))
+            accumulatedSize = 0
+            for i in range(len(self.notificationTextList)):
+                screen.blit(self.alertFont.render(self.notificationTextList[i], True, (255,255,255)).convert_alpha(), ((350-sizeList[i][0])/2, self.notificationAnimationCurrentY+self.notificationAnimationImage.get_height()+accumulatedSize+2*i))
+                accumulatedSize += sizeList[i][1]
 
     def draw(self):
         self.drawBitNes()
@@ -1497,6 +1593,8 @@ s.send("USER link_7777\r\n".encode())
 s.send("PASS oauth:Redacted oauth password (hash)\r\n".encode())
 s.send("NICK link_7777\r\n".encode())
 s.send("JOIN #link_7777\r\n".encode())
+#s.send("JOIN #themexicanrunner\r\n".encode())
+s.send("CAP REQ :twitch.tv/commands\r\n".encode())
 s.send("CAP REQ :twitch.tv/tags\r\n".encode())
 
 s.send("PRIVMSG #link_7777 :bot has joined\r\n".encode())
@@ -1607,7 +1705,12 @@ def SearchGame(game):
     req = urllib2.Request('https://api.twitch.tv/kraken/search/streams?query=' + urllib.quote_plus(game))
     req.add_header('Accept','application/vnd.twitchtv.v5+json')
     req.add_header('Client-ID',CLIENT_ID)
-    res = urllib2.urlopen(req)
+    try:
+        res = urllib2.urlopen(req)
+    except:
+        error = sys.exc_info()[0]
+        print("Search Failed: " + repr(error))
+        return json.loads("{}")
     return json.loads(res.read())
 
 def LiveAlertCheck():
