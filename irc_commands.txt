@@ -10,3 +10,5 @@ shit|The Scrubbingly Hygenic Invitational Tournament (SHIT) game is NES Tiny Too
 bits|Bits, while not necessary, are appreciated. New Graphical widget NES Bit Collection!
 key|Red=unfinished, black=finished, yellow=capable, green=confident
 big20|A Race through 20 games! http://thebestofnes.com/big20
+gg|link7777gg
+virtualrob|A display that emulates R.O.B. as a visual aid for Stack-Up
