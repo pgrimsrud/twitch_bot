@@ -1142,7 +1142,7 @@ class BitNesCollection:
                 (self.alertText,self.alertBits) = self.alertQueue.pop(0)
                 self.alertTimeout = 20*8
                 if(self.muted == 0):
-                    pygame.mixer.music.load("C:\Users\pgrimsrud\NES\\bot\img\Purple.mp3")
+                    pygame.mixer.music.stop()
                     pygame.mixer.music.play()
         #else:
         #    if self.animationFlag == 0:
@@ -1173,7 +1173,7 @@ class BitNesCollection:
                 self.notificationTimeout = 30*8
                 print("Notification\n")
                 if(self.muted == 0):
-                    pygame.mixer.music.load("C:\Users\pgrimsrud\NES\\bot\img\Purple.mp3")
+                    pygame.mixer.music.stop()
                     pygame.mixer.music.play()
                 self.notification_animation_start()
 
