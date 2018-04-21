@@ -840,8 +840,8 @@ class SearchThread (threading.Thread):
                     if 'streams' in search_result:
                         for chan in search_result['streams']:
                             #print(chan)
-                            if repr(theGame['game']) == repr(chan['channel']['game']):
-                                tmpLiveList[chan['channel']['display_name']] = chan['channel']['game']
+                            if repr(unicode(theGame['game'])) == repr(chan['channel']['game']):
+                                tmpLiveList[repr(chan['channel']['display_name'])] = repr(chan['channel']['game'])
                                 #print("%s %s\n" % (repr(chan['channel']['display_name']), repr(chan['channel']['game'])))
                         for name in tmpLiveList:
                             #print("LiveAlertList:")
@@ -849,7 +849,7 @@ class SearchThread (threading.Thread):
                             if not 'live' in LiveAlertList[i] or not name in LiveAlertList[i]['live']:
                                 LiveAlertMessage = LiveAlertMessage + name + ' is playing ' + tmpLiveList[name] + "\n"
                                 #print("Message:")
-                                #print(LiveAlertMessage
+                                #print(LiveAlertMessage)
                     LiveAlertList[i]['live'] = tmpLiveList
             if LiveAlertMessage != '':
                 SendLiveAlertMessage(LiveAlertMessage)
