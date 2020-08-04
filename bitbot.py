@@ -56,33 +56,34 @@ class TwitchRequestHandler(http.server.BaseHTTPRequestHandler):
         print(self.client_address)
         print("Path:\n")
         print(self.path)
+        #if 'hub.challenge' in data:
         self.send_response(200)
         self.end_headers()
         self.wfile.write(data['hub.challenge'][0].encode("utf-8"))
-        
+
 
 class HttpThread (threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
         self.httpd = None
-        
+
     def stop(self):
         self.httpd.shutdown()
-        
+
     def run(self):
         self.httpd = http.server.HTTPServer((SERVER_IP, int(SERVER_PORT)), TwitchRequestHandler)
         print("Starting HTTP server\n")
         self.httpd.serve_forever()
-        
+
 class SoundThread (threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
         self.httpd = None
-        
+
     def run(self):
         call(["C:\Python36\python.exe","Purple.py"])
 
-        
+
 
 buff = ""
 lines = ""
@@ -98,7 +99,7 @@ CLIENT_ID = "Redacted client ID (hash)"
 ACCESS_TOKEN = "Redacted access token (hash)"
 
 LiveAlertTimeout = 300*8
-LiveAlertListLength = 14
+LiveAlertListLength = 21
 LiveAlertList = [0 for i in range(LiveAlertListLength)]
 LiveAlertList[0] =  {'game':'Star Wars: The Empire Strikes Back'}
 LiveAlertList[1] =  {'game':'Time Lord'}
@@ -114,6 +115,13 @@ LiveAlertList[10] = {'game':'Super Glove Ball'}
 LiveAlertList[11] = {'game':'Spy Hunter'}
 LiveAlertList[12] = {'game':'City Connection'}
 LiveAlertList[13] = {'game':'Pugsley\'s Scavenger Hunt'}
+LiveAlertList[14] = {'game':'M.C. Kids'}
+LiveAlertList[15] = {'game':'Pipe Dream'}
+LiveAlertList[16] = {'game':'The Mutant Virus: Crisis in a Computer World'}
+LiveAlertList[17] = {'game':'Chicken of the Farm'}
+LiveAlertList[18] = {'game':'Arkanoid'}
+LiveAlertList[19] = {'game':'Batman: The Video Game'}
+LiveAlertList[20] = {'game':'Project Blue'}
 #LiveAlertList[11] = {'game':'Zelda II: The Adventure of Link'}
 
 NesImageCount = 301
@@ -840,7 +848,7 @@ class SearchThread (threading.Thread):
 
     def stop(self):
         self.running = False
-        
+
     def run(self):
         while self.running:
             global LiveAlertTimeout
@@ -875,7 +883,23 @@ class SearchThread (threading.Thread):
 
 class IrcThread (threading.Thread):
     def __init__(self):
+        global s
+
         threading.Thread.__init__(self)
+
+        # to connect to the irc you'll need an oauth code for your account as a "PASS" when you connect
+
+        s = socket.socket()
+        s.connect(("irc.twitch.tv", 6667))
+        s.send("USER link_7777\r\n".encode("utf-8"))
+        s.send("PASS oauth:Redacted oauth password (hash)\r\n".encode("utf-8"))
+        s.send("NICK link_7777\r\n".encode("utf-8"))
+        s.send("JOIN #link_7777\r\n".encode("utf-8"))
+        #s.send("JOIN #themexicanrunner\r\n".encode("utf-8"))
+        s.send("CAP REQ :twitch.tv/commands\r\n".encode("utf-8"))
+        s.send("CAP REQ :twitch.tv/tags\r\n".encode("utf-8"))
+
+        s.send("PRIVMSG #link_7777 :bot has joined\r\n".encode("utf-8"))
         self.running = True
 
     def stop(self):
@@ -884,6 +908,7 @@ class IrcThread (threading.Thread):
     def run(self):
         global buff
         global bitnes
+        global s
 
         while self.running:
             time.sleep(1)
@@ -893,7 +918,9 @@ class IrcThread (threading.Thread):
                     buff = buff + dataReady[0][0].recv(4096).decode('utf-8', "ignore")
                     match = re.search('^PING', buff)
                     if not match:
-                        print(buff.encode(sys.stdout.encoding, errors='replace'))
+                        buffStr = buff.encode(sys.stdout.encoding, errors='replace')
+                        if buffStr != '':
+                            print(buff.encode(sys.stdout.encoding, errors='replace'))
                     lines = buff.split("\n")
                     buff = lines.pop()
                 except socket.error:
@@ -912,11 +939,9 @@ class IrcThread (threading.Thread):
                 data = ''
                 if line[0] == '@':
                     line = line[1:]
-                    index = line.find(":")
                     index2 = line.find("#link_7777")
                     #index2 = line.find("#themexicanrunner")
-                    meta = line[0:index]
-                    header = line[index+1:index2]
+                    meta = line[:index2]
                     data = line[index2+12:]
                     #data = line[index2+19:]
                     #print("message meta -> '%s'" % meta).encode(sys.stdout.encoding, errors='replace')
@@ -968,7 +993,7 @@ class IrcThread (threading.Thread):
 
                 if 'msg-id' in meta_dict:
                     if meta_dict['msg-id'] == 'sub' or meta_dict['msg-id'] == 'resub':
-                        subList = [meta_dict['display-name'], "is now a " + meta_dict['msg-param-months'] + " month", "subscriber "]
+                        subList = [meta_dict['display-name'], "is now a " + meta_dict['msg-param-cumulative-months'] + " month", "subscriber "]
                         if meta_dict['msg-param-sub-plan'] == 'Prime':
                             subList[2] += "with Prime"
                         if meta_dict['msg-param-sub-plan'] == '1000':
@@ -982,7 +1007,7 @@ class IrcThread (threading.Thread):
                         bitnes.add_notification([meta_dict['display-name'], meta_dict['msg-param-viewerCount'] + " viewer RAID!"])
                     #if meta_dict['msg-id'] == 'ritual':
                     #    new_chatter is the only valid value so far, which seems useless
-                    
+
                 if data == '':
                     continue
 
@@ -1005,7 +1030,7 @@ class IrcThread (threading.Thread):
                     if start_time == None:
                         s.send("PRIVMSG #link_7777 :This stream is not live\r\n".encode("utf-8"))
                     else:
-                        s.send("PRIVMSG #link_7777 :This stream has been live since " + start_time + "\r\n".encode("utf-8"))
+                        s.send(("PRIVMSG #link_7777 :This stream has been live since " + start_time + "\r\n").encode("utf-8"))
 
                 if 'display-name' in meta_dict and meta_dict['display-name'] == 'link_7777':
                     #Restricted commands
@@ -1042,8 +1067,8 @@ class IrcThread (threading.Thread):
 
                     match = re.search('^\!host\s(.*)', data)
                     if match:
-                        s.send("PRIVMSG #link_7777 :/host " + match.group(1) + "\r\n".encode("utf-8"))
-                        s.send("PRIVMSG #link_7777 :Now hosting " + match.group(1) + "\r\n".encode("utf-8"))
+                        s.send(("PRIVMSG #link_7777 :/host " + match.group(1) + "\r\n").encode("utf-8"))
+                        s.send(("PRIVMSG #link_7777 :Now hosting " + match.group(1) + "\r\n").encode("utf-8"))
 
                     match = re.search('^\!unhost', data)
                     if match:
@@ -1158,7 +1183,7 @@ class BitNesCollection:
         if viewers != 0:
             hostList.append("for %d viewers" % (viewers))
         self.add_notification(hostList)
-        
+
     def outstanding_bits_check(self):
         if self.alertTimeout == 0:
             if len(self.alertQueue) > 0:
@@ -1341,7 +1366,7 @@ class BitNesCollection:
         height = self.animationImage.get_height()
         for i in range(height):
             for j in range(width):
-                self.animationImage.set_at((j,i), color)        
+                self.animationImage.set_at((j,i), color)
 
     def create_ghost(self, ghost, bits):
         width = ghost.get_width()
@@ -1495,7 +1520,7 @@ class BitNesCollection:
                 self.max_overall_height = currentImage.get_height()
             total_count = total_count + image_count
             print("%d %d %d %s" % (i, image_count, total_count, NesImageLibrary[i]['name']))
-        
+
     def check(self):
         for i in range(self.size):
             if self.tower[2][i] != self.size-i:
@@ -1605,21 +1630,9 @@ class BitNesCollection:
     #            c = self.pixelImage.get_at((j,i))
     #            print("(%02X,%02X,%02X), " % (c.r, c.g, c.b))
     #        print("\n")
-        
-        
-# to connect to the irc you'll need an oauth code for your account as a "PASS" when you connect
 
-s = socket.socket()
-s.connect(("irc.twitch.tv", 6667))
-s.send("USER link_7777\r\n".encode("utf-8"))
-s.send("PASS oauth:Redacted oauth password (hash)\r\n".encode("utf-8"))
-s.send("NICK link_7777\r\n".encode("utf-8"))
-s.send("JOIN #link_7777\r\n".encode("utf-8"))
-#s.send("JOIN #themexicanrunner\r\n".encode("utf-8"))
-s.send("CAP REQ :twitch.tv/commands\r\n".encode("utf-8"))
-s.send("CAP REQ :twitch.tv/tags\r\n".encode("utf-8"))
 
-s.send("PRIVMSG #link_7777 :bot has joined\r\n".encode("utf-8"))
+
 
 irc_thread = IrcThread()
 irc_thread.start()
@@ -1639,16 +1652,19 @@ def RequestFollowerNotifications():
     data = urllib.parse.urlencode(info).encode("utf-8")
     req = urllib.request.Request('https://api.twitch.tv/helix/webhooks/hub', data)
     req.add_header('Client-ID',CLIENT_ID)
+    req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
     req.get_method = lambda: 'POST'
     res = urllib.request.urlopen(req)
     print(res.read())
     print("Requested follower notifications\n")
-    
+
 
 def UpdateChannel(info):
     data = urllib.parse.urlencode(info).encode("utf-8")
     req = urllib.request.Request('https://api.twitch.tv/kraken/channels/' + USER_ID, data)
     req.add_header('Accept','application/vnd.twitchtv.v5+json')
+    req.add_header('Client-ID', CLIENT_ID)
+    #req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
     req.add_header('Authorization',"OAuth " + ACCESS_TOKEN)
     req.get_method = lambda: 'PUT'
     res = urllib.request.urlopen(req)
@@ -1666,16 +1682,19 @@ def getChannelByID(userID):
     req = urllib.request.Request('https://api.twitch.tv/kraken/channels/' + userID)
     req.add_header('Accept','application/vnd.twitchtv.v5+json')
     req.add_header('Client-ID', CLIENT_ID)
+    req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
     res = urllib.request.urlopen(req)
     return res.read()
 
 def GetGame():
     channel = json.loads(getChannelByID(USER_ID))
     s.send(("PRIVMSG #link_7777 :Current Game: %s\r\n" % (channel["game"])).encode("utf-8"))
-    
+
 def GetTitle():
     channel = json.loads(getChannelByID(USER_ID))
     s.send(("PRIVMSG #link_7777 :Current Title: %s\r\n" % (channel["status"])).encode("utf-8"))
+    #users = GetUsers()
+    #print(users)
 
 def GetDisplayName(userID):
     channel = json.loads(getChannelByID(userID))
@@ -1686,6 +1705,15 @@ def GetStream():
     req = urllib.request.Request('https://api.twitch.tv/kraken/streams/' + USER_ID)
     req.add_header('Accept','application/vnd.twitchtv.v5+json')
     req.add_header('Client-ID',CLIENT_ID)
+    req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
+    res = urllib.request.urlopen(req)
+    return res.read()
+
+def GetUsers():
+    req = urllib.request.Request('https://api.twitch.tv/kraken/users/' + USER_ID)
+    req.add_header('Accept','application/vnd.twitchtv.v5+json')
+    req.add_header('Client-ID',CLIENT_ID)
+    req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
     res = urllib.request.urlopen(req)
     return res.read()
 
@@ -1727,6 +1755,7 @@ def SearchGame(game):
     req = urllib.request.Request('https://api.twitch.tv/kraken/search/streams?query=' + urllib.parse.quote_plus(game))
     req.add_header('Accept','application/vnd.twitchtv.v5+json')
     req.add_header('Client-ID',CLIENT_ID)
+    req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
     try:
         res = urllib.request.urlopen(req)
     except:
@@ -1796,3 +1825,8 @@ while 1:
                 http_thread.stop()
                 search_thread.stop()
                 quit()
+            if event.key == pygame.K_r:
+                irc_thread.stop()
+                irc_thread = IrcThread()
+                irc_thread.start()
+                print("reset irc thread\n")
