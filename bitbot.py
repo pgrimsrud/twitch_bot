@@ -17,17 +17,44 @@ import time
 import http.server
 #import cgi
 import random
+import hmac
+import hashlib
+import ssl
 import smtplib
 from subprocess import call
+#import asyncio
+#from aiohttp import web
 
-SERVER_IP = "Redacted client IP"
-EXTERNAL_IP = "Redacted external facing IP"
-EXTERNAL_ADDRESS = "http://" + EXTERNAL_IP
-SERVER_PORT = "8100"
-SECRET = "requested by bitNES"
+SERVER_IP = "Redacted server IP"
+EXTERNAL_IP = "Redacted external IP"
+EXTERNAL_ADDRESS = "https://" + EXTERNAL_IP
+SERVER_PORT = "8100" #twitch now requires https on port 443, but I forwarded to 8100 in my router settings
+SUB_SECRET = "Redacted subscription secret"
+
+#certbot from letsencrypt required to get certificates for the secure connection for incoming alerts we're subscribed to
+#note that you must have control of your IP and you must have a domain that points to it for certbot to give you certificates
+DOMAIN = "Redacted domain name"
+CA_CERT = "fullchain.pem"
+CA_KEY = "privkey.pem"
+
+# In order to access private data via the Twitch API a client-id and access token is required
+# see https://github.com/justintv/Twitch-API/blob/master/authentication.md for instructions
+# you will need to register your app to get a client-id then have a user (yourself) authorize access to your account when authorized you will recieve an access token.
+# you will also need to find your user id (which is an actual number not your handle)
+APP_NAME = "Redacted app name"
+USER_ID = "Redacted user ID"
+CLIENT_ID = "Redacted client ID"
+ACCESS_TOKEN = "Redacted access token"
+AppAccessToken = ''
+
+
 
 class TwitchRequestHandler(http.server.BaseHTTPRequestHandler):
+    def do_HEAD(self):
+        print("Head!")
+
     def do_POST(self):
+        print("POST!")
         global bitnes
 
         header = self.headers.items()
@@ -35,17 +62,110 @@ class TwitchRequestHandler(http.server.BaseHTTPRequestHandler):
         print(header)
         length = self.headers['content-length']
         data = self.rfile.read(int(length))
-        jsondata = json.loads(data)
-        print(jsondata)
-        print("ID %s\n" % jsondata['data']['from_id'])
-        print("New Follower %s\n" % GetDisplayName(jsondata['data']['from_id']))
-        bitnes.add_notification([GetDisplayName(jsondata['data']['from_id']), "is now following!"])
-        follow_message = "PRIVMSG #link_7777 :%s is now following!\r\n" % (GetDisplayName(jsondata['data']['from_id']))
-        s.send(follow_message.encode("utf-8"))
-        self.send_response(200)
-        self.end_headers()
+        header_dict = {}
+        for item in header:
+            header_dict[item[0]] = item[1]
+        #jsonhead = json.loads(header)
+        if(header_dict['Twitch-Eventsub-Message-Type']):
+            jsondata = json.loads(data)
+            print(jsondata)
+
+            if(header_dict['Twitch-Eventsub-Message-Type'] == 'webhook_callback_verification'):
+                hmac_message = header_dict['Twitch-Eventsub-Message-Id'].encode('utf-8') + header_dict['Twitch-Eventsub-Message-Timestamp'].encode('utf-8') + data
+                signature = hmac.new(SUB_SECRET.encode('utf-8'), msg=hmac_message, digestmod=hashlib.sha256).hexdigest()
+                signature = 'sha256=' + signature
+                if(signature == header_dict['Twitch-Eventsub-Message-Signature']):
+                    print('Signature matched!')
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(jsondata['challenge'].encode('utf-8'))
+                else:
+                    self.send_response(0)
+                    self.end_headers()
+            else:
+                if(header_dict['Twitch-Eventsub-Subscription-Type'] == 'channel.follow'):
+                    print("New Follower %s\n" % jsondata['event']['user_name'])
+                    bitnes.add_notification([jsondata['event']['user_name'], "is now following!"])
+                    follow_message = "PRIVMSG #link_7777 :%s is now following!\r\n" % (jsondata['event']['user_name'])
+                    s.send(follow_message.encode("utf-8"))
+                elif(header_dict['Twitch-Eventsub-Subscription-Type'] == 'channel.subscribe'):
+                    print("New Subscriber %s\n" % jsondata['event']['user_name'])
+                    bitnes.add_notification([jsondata['event']['user_name'], " subscribed at tier " + jsondata['event']['tier']])
+                    follow_message = "PRIVMSG #link_7777 :%s subscribed at tier %s!\r\n" % (jsondata['event']['user_name'], jsondata['event']['tier'])
+                    s.send(follow_message.encode("utf-8"))
+                elif(header_dict['Twitch-Eventsub-Subscription-Type'] == 'channel.subscription.gift'):
+                    gifter = 'Anonymous'
+                    if(jsondata['event']['is_anonymous'] == 0):
+                        gifter = jsondata['event']['user_name']
+                    count = jsondata['event']['total']
+                    tier = jsondata['event']['tier']
+                    print("New Sub Gift %s %s %s\n" % (gifter, count, tier))
+                    bitnes.add_notification([gifter, " gifted %s tier %s subs" + (count, tier)])
+                    follow_message = "PRIVMSG #link_7777 :%s gifted %s tier %s subs!\r\n" % (gifter, count, tier)
+                    s.send(follow_message.encode("utf-8"))
+                elif(header_dict['Twitch-Eventsub-Subscription-Type'] == 'channel.subscription.message'):
+                    print("New Sub message %s\n" % jsondata['event']['user_name'])
+                    bitnes.add_notification([jsondata['event']['user_name'], " subscribed at tier " + jsondata['event']['tier']])
+                    follow_message = "PRIVMSG #link_7777 :%s subscribed at tier %s!\r\n" % (jsondata['event']['user_name'], jsondata['event']['tier'])
+                    s.send(follow_message.encode("utf-8"))
+                    follow_message = "PRIVMSG #link_7777 :Sub message: %s\r\n" % (jsondata['event']['message']['text'])
+                    s.send(follow_message.encode("utf-8"))
+                elif(header_dict['Twitch-Eventsub-Subscription-Type'] == 'channel.cheer'):
+                    cheerer = 'Anonymous'
+                    if(jsondata['event']['is_anonymous'] == 0):
+                        cheerer = jsondata['event']['user_name']
+                    bits = jsondata['event']['bits']
+                    print("New Cheer %s %s\n" % (cheerer, bits))
+                    UpdateBits(jsondata['subscription']['created_at'], cheerer, bits)
+                elif(header_dict['Twitch-Eventsub-Message-Type'] == 'channel.raid'):
+                    raider = jsondata['event']['from_broadcaster_user_name']
+                    viewers = jsondata['event']['viewers']
+                    print("New Raid %s %s\n" % (raider, viewers))
+                    bitnes.add_notification([raider, " raided with %s viewers" % viewers])
+                    follow_message = "PRIVMSG #link_7777 :%s raided with %s viewers!\r\n" % (raider, viewers)
+                    s.send(follow_message.encode("utf-8"))
+                elif(header_dict['Twitch-Eventsub-Subscription-Type'] == 'channel.hype_train.begin'):
+                    total = jsondata['event']['total']
+                    progress = jsondata['event']['progress']
+                    goal = jsondata['event']['goal']
+                    expires = jsondata['event']['expires_at']
+                    contributor = jsondata['event']['last_contributor']['user_name']
+                    print("hype train begin %s, %s, %s, %s, %s" % (total, progress, goal, expires, contributor))
+                    bitnes.add_notification(["Hype Train Begin", "%s/%s points" % (progress, goal), contributor])
+                    follow_message = "PRIVMSG #link_7777 :Hype Train Begin! level progress %s/%s points. %s points total. contributor %s. Expires %s." % (progress, goal, total, contributor, expires)
+                    s.send(follow_message.encode("utf-8"))
+                elif(header_dict['Twitch-Eventsub-Subscription-Type'] == 'channel.hype_train.progress'):
+                    level = jsondata['event']['level']
+                    total = jsondata['event']['total']
+                    progress = jsondata['event']['progress']
+                    goal = jsondata['event']['goal']
+                    expires = jsondata['event']['expires_at']
+                    contributor = jsondata['event']['last_contributor']['user_name']
+                    print("hype train progress %s, %s, %s, %s, %s, %s" % (level, total, progress, goal, expires, contributor))
+                    bitnes.add_notification(["Hype Train %s" %(level), "%s/%s points" % (progress, goal), contributor])
+                    follow_message = "PRIVMSG #link_7777 :Hype Train! level %s progress %s/%s points. %s points total. contributor %s. Expires %s." % (level, progress, goal, total, contributor, expires)
+                    s.send(follow_message.encode("utf-8"))
+                elif(header_dict['Twitch-Eventsub-Subscription-Type'] == 'channel.hype_train.end'):
+                    level = jsondata['event']['level']
+                    total = jsondata['event']['total']
+                    started = jsondata['event']['started_at']
+                    ended = jsondata['event']['ended_at']
+                    cooldown = jsondata['event']['cooldown_ends_at']
+                    print("hype train end %s, %s, %s, %s, %s" % (level, total, started, ended, cooldown))
+                    bitnes.add_notification(["Hype Train End", "%s points" % (total)])
+                    follow_message = "PRIVMSG #link_7777 :Hype Train End! level %s. %s points total. Started %s Ended %s. Cooldown until %s" % (level, total, started, ended, cooldown)
+                    s.send(follow_message.encode("utf-8"))
+
+                self.send_response(200)
+                self.end_headers()
+        else:
+            #not from twitch
+            self.send_response(200)
+            self.end_headers()
+
 
     def do_GET(self):
+        print("GET!")
         header = self.headers.items()
         data = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         print("Header:\n")
@@ -59,7 +179,7 @@ class TwitchRequestHandler(http.server.BaseHTTPRequestHandler):
         #if 'hub.challenge' in data:
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(data['hub.challenge'][0].encode("utf-8"))
+        #self.wfile.write(data['hub.challenge'][0].encode("utf-8"))
 
 
 class HttpThread (threading.Thread):
@@ -68,12 +188,15 @@ class HttpThread (threading.Thread):
         self.httpd = None
 
     def stop(self):
+        print("http stop")
         self.httpd.shutdown()
 
     def run(self):
         self.httpd = http.server.HTTPServer((SERVER_IP, int(SERVER_PORT)), TwitchRequestHandler)
+        self.httpd.socket = ssl.wrap_socket(self.httpd.socket, certfile=CA_CERT, keyfile=CA_KEY, server_side=True)
         print("Starting HTTP server\n")
         self.httpd.serve_forever()
+
 
 class SoundThread (threading.Thread):
     def __init__(self):
@@ -89,17 +212,9 @@ buff = ""
 lines = ""
 bitInfo = {'link_7777_total_bits': 0}
 
-# In order to access private data via the Twitch API a client-id and access token is required
-# see https://github.com/justintv/Twitch-API/blob/master/authentication.md for instructions
-# you will need to register your app to get a client-id then have a user (yourself) authorize access to your account when authorized you will recieve an access token.
-# you will also need to find your user id (which is an actual number not your handle)
-APP_NAME = "link_7777"
-USER_ID = "Redacted user ID (number)"
-CLIENT_ID = "Redacted client ID (hash)"
-ACCESS_TOKEN = "Redacted access token (hash)"
 
 LiveAlertTimeout = 300*8
-LiveAlertListLength = 21
+LiveAlertListLength = 22
 LiveAlertList = [0 for i in range(LiveAlertListLength)]
 LiveAlertList[0] =  {'game':'Star Wars: The Empire Strikes Back'}
 LiveAlertList[1] =  {'game':'Time Lord'}
@@ -115,19 +230,20 @@ LiveAlertList[10] = {'game':'Super Glove Ball'}
 LiveAlertList[11] = {'game':'Spy Hunter'}
 LiveAlertList[12] = {'game':'City Connection'}
 LiveAlertList[13] = {'game':'Pugsley\'s Scavenger Hunt'}
-LiveAlertList[14] = {'game':'M.C. Kids'}
+LiveAlertList[14] = {'game':'M.C Kids'}
 LiveAlertList[15] = {'game':'Pipe Dream'}
 LiveAlertList[16] = {'game':'The Mutant Virus: Crisis in a Computer World'}
 LiveAlertList[17] = {'game':'Chicken of the Farm'}
 LiveAlertList[18] = {'game':'Arkanoid'}
 LiveAlertList[19] = {'game':'Batman: The Video Game'}
 LiveAlertList[20] = {'game':'Project Blue'}
+LiveAlertList[21] = {'game':'Fire \'n Ice'}
 #LiveAlertList[11] = {'game':'Zelda II: The Adventure of Link'}
 
 NesImageCount = 301
 NesImageLibrary = [0 for i in range(NesImageCount)]
 NesImageLibrary[0  ] = {'name':'10-Yard Fight',                                               'file':'C:\\Users\pgrimsrud\\NES\\bot\img\\001.bmp',    'pixels':0 }
-NesImageLibrary[1  ] = {'name':'1942',                                                        'file':'C:\\Users\pgrimsrud\\NES\\bot\img\\002.bmp',    'pixels':0 } 
+NesImageLibrary[1  ] = {'name':'1942',                                                        'file':'C:\\Users\pgrimsrud\\NES\\bot\img\\002.bmp',    'pixels':0 }
 NesImageLibrary[2  ] = {'name':'1943: The Battle of Midway',                                  'file':'C:\\Users\pgrimsrud\\NES\\bot\img\\003.bmp',    'pixels':0 }
 NesImageLibrary[3  ] = {'name':'3-D WorldRunner',                                             'file':'C:\\Users\pgrimsrud\\NES\\bot\img\\004.bmp',    'pixels':0 }
 NesImageLibrary[4  ] = {'name':'720\u00B0',                                                   'file':'C:\\Users\pgrimsrud\\NES\\bot\img\\005.bmp',    'pixels':0 }
@@ -892,7 +1008,7 @@ class IrcThread (threading.Thread):
         s = socket.socket()
         s.connect(("irc.twitch.tv", 6667))
         s.send("USER link_7777\r\n".encode("utf-8"))
-        s.send("PASS oauth:Redacted oauth password (hash)\r\n".encode("utf-8"))
+        s.send("PASS oauth:Redacted oauth token\r\n".encode("utf-8"))
         s.send("NICK link_7777\r\n".encode("utf-8"))
         s.send("JOIN #link_7777\r\n".encode("utf-8"))
         #s.send("JOIN #themexicanrunner\r\n".encode("utf-8"))
@@ -911,6 +1027,7 @@ class IrcThread (threading.Thread):
         global s
 
         while self.running:
+            lines = []
             time.sleep(1)
             dataReady = select.select([s], [], [], 0)
             if dataReady[0]:
@@ -926,7 +1043,6 @@ class IrcThread (threading.Thread):
                 except socket.error:
                     print(socket.error)
             else:
-               lines = []
                next
 
             #print(lines)
@@ -965,18 +1081,18 @@ class IrcThread (threading.Thread):
                 if match:
                     s.send("PONG :tmi.twitch.tv\r\n".encode("utf-8"))
 
-                if 'bits' in meta_dict:
-                    message = "PRIVMSG #link_7777:" + meta_dict['display-name'] + " thank you for the " + meta_dict['bits'] + " bits!\r\n"
-                    s.send(message.encode("utf-8"))
-                    if 'sent-ts' in meta_dict:
-                        #print('sent-ts')
-                        UpdateBits(meta_dict['sent-ts'], meta_dict['display-name'], int(meta_dict['bits']))
-                    elif 'tmi-sent-ts' in meta_dict:
-                        #print('tmi-sent-ts')
-                        UpdateBits(meta_dict['tmi-sent-ts'], meta_dict['display-name'], int(meta_dict['bits']))
-                    else:
-                        #print('none')
-                        UpdateBits('0', meta_dict['display-name'], int(meta_dict['bits']))
+                #if 'bits' in meta_dict:
+                    #message = "PRIVMSG #link_7777:" + meta_dict['display-name'] + " thank you for the " + meta_dict['bits'] + " bits!\r\n"
+                    #s.send(message.encode("utf-8"))
+                    #if 'sent-ts' in meta_dict:
+                    #    #print('sent-ts')
+                    #    UpdateBits(meta_dict['sent-ts'], meta_dict['display-name'], int(meta_dict['bits']))
+                    #elif 'tmi-sent-ts' in meta_dict:
+                    #    #print('tmi-sent-ts')
+                    #    UpdateBits(meta_dict['tmi-sent-ts'], meta_dict['display-name'], int(meta_dict['bits']))
+                    #else:
+                    #    #print('none')
+                    #    UpdateBits('0', meta_dict['display-name'], int(meta_dict['bits']))
 
                 match = re.search('jtv\!.*link_7777 :(.*) is now auto.*to (.*) viewers', line)
                 if match:
@@ -991,20 +1107,20 @@ class IrcThread (threading.Thread):
                     #print(match.group(0))
                     bitnes.host_alert(match.group(1), 0, False)
 
-                if 'msg-id' in meta_dict:
-                    if meta_dict['msg-id'] == 'sub' or meta_dict['msg-id'] == 'resub':
-                        subList = [meta_dict['display-name'], "is now a " + meta_dict['msg-param-cumulative-months'] + " month", "subscriber "]
-                        if meta_dict['msg-param-sub-plan'] == 'Prime':
-                            subList[2] += "with Prime"
-                        if meta_dict['msg-param-sub-plan'] == '1000':
-                            subList[2] += "at $4.99"
-                        if meta_dict['msg-param-sub-plan'] == '2000':
-                            subList[2] += "at $9.99"
-                        if meta_dict['msg-param-sub-plan'] == '3000':
-                            subList[2] += "at $24.99"
-                        bitnes.add_notification(subList)
-                    if meta_dict['msg-id'] == 'raid':
-                        bitnes.add_notification([meta_dict['display-name'], meta_dict['msg-param-viewerCount'] + " viewer RAID!"])
+                #if 'msg-id' in meta_dict:
+                #    if meta_dict['msg-id'] == 'sub' or meta_dict['msg-id'] == 'resub':
+                #        subList = [meta_dict['display-name'], "is now a " + meta_dict['msg-param-cumulative-months'] + " month", "subscriber "]
+                #        if meta_dict['msg-param-sub-plan'] == 'Prime':
+                #            subList[2] += "with Prime"
+                #        if meta_dict['msg-param-sub-plan'] == '1000':
+                #            subList[2] += "at $4.99"
+                #        if meta_dict['msg-param-sub-plan'] == '2000':
+                #            subList[2] += "at $9.99"
+                #        if meta_dict['msg-param-sub-plan'] == '3000':
+                #            subList[2] += "at $24.99"
+                #        bitnes.add_notification(subList)
+                #    if meta_dict['msg-id'] == 'raid':
+                #        bitnes.add_notification([meta_dict['display-name'], meta_dict['msg-param-viewerCount'] + " viewer RAID!"])
                     #if meta_dict['msg-id'] == 'ritual':
                     #    new_chatter is the only valid value so far, which seems useless
 
@@ -1158,7 +1274,7 @@ class BitNesCollection:
     def subscriptionTick(self):
         self.subscriptionTimeout -= 1
         if self.subscriptionTimeout == 0:
-            RequestFollowerNotifications()
+            NewRequestNotifications()
             self.subscriptionTimeout = 604800*8
 
     def mute(self):
@@ -1643,40 +1759,110 @@ http_thread.start()
 search_thread = SearchThread()
 search_thread.start()
 
-def RequestFollowerNotifications():
-    info = { 'hub.callback': EXTERNAL_ADDRESS + ":" + SERVER_PORT,
-             'hub.mode': 'subscribe',
-             'hub.topic': 'https://api.twitch.tv/helix/users/follows?to_id=' + USER_ID,
-             'hub.lease_seconds': '604800',
-             'hub.secret': SECRET}
+def GetAppAccessToken():
+    token = ''
+    info = { 'client_id': CLIENT_ID,
+             'client_secret': SUB_SECRET,
+             'grant_type': 'client_credentials',
+             'scope': 'channel:read:subscriptions bits:read channel:read:hype_train channel:manage:broadcast'
+           }
     data = urllib.parse.urlencode(info).encode("utf-8")
-    req = urllib.request.Request('https://api.twitch.tv/helix/webhooks/hub', data)
-    req.add_header('Client-ID',CLIENT_ID)
-    req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
+    req = urllib.request.Request('https://id.twitch.tv/oauth2/token', data)
     req.get_method = lambda: 'POST'
-    res = urllib.request.urlopen(req)
-    print(res.read())
-    print("Requested follower notifications\n")
+    res = ''
+    try:
+        res = urllib.request.urlopen(req)
+    except urllib.error.HTTPError as e:
+        print(e.read())
+        print(e.read().decode())
+    if res != '':
+        read_res = res.read()
+        print(read_res)
+        str_res = read_res.decode('utf-8')
+        json_res = json.loads(str_res)
+        token = json_res['access_token']
+
+    return token
+
+def NewRequestNotifications(sub_type):
+    if(sub_type == 'channel.raid'):
+        info = { 'type': sub_type,
+                 'version': '1',
+                 'condition': { 'to_broadcaster_user_id': USER_ID
+                              },
+                 'transport': { 'method': 'webhook',
+                                'callback': DOMAIN,
+                                'secret': SUB_SECRET
+                              }
+               }
+    else:
+        info = { 'type': sub_type,
+                 'version': '1',
+                 'condition': { 'broadcaster_user_id': USER_ID
+                              },
+                 'transport': { 'method': 'webhook',
+                                'callback': DOMAIN,
+                                'secret': SUB_SECRET
+                              }
+               }
+    print(info)
+    #data = urllib.parse.urlencode(json.dumps(info)).encode("utf-8")
+    data = json.dumps(info).encode("utf-8")
+    req = urllib.request.Request('https://api.twitch.tv/helix/eventsub/subscriptions', data)
+    req.add_header('Client-ID',CLIENT_ID)
+    req.add_header('Authorization',"Bearer " + AppAccessToken)
+    req.add_header('Content-Type',"application/json")
+    #print(len(data))
+    #req.add_header('Content-Length',len(data))
+    req.get_method = lambda: 'POST'
+    res = ''
+    try:
+        res = urllib.request.urlopen(req)
+    except urllib.error.HTTPError as e:
+        print(e.read())
+        print(e.read().decode())
+    if res != '':
+        print(res.info())
+        print(res.read())
+    print("Requested %s\n" % sub_type)
 
 
 def UpdateChannel(info):
     data = urllib.parse.urlencode(info).encode("utf-8")
-    req = urllib.request.Request('https://api.twitch.tv/kraken/channels/' + USER_ID, data)
-    req.add_header('Accept','application/vnd.twitchtv.v5+json')
+    req = urllib.request.Request('https://api.twitch.tv/helix/channels?broadcaster_id=' + USER_ID, data)
+    #req.add_header('Accept','application/vnd.twitchtv.v5+json')
     req.add_header('Client-ID', CLIENT_ID)
-    #req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
-    req.add_header('Authorization',"OAuth " + ACCESS_TOKEN)
-    req.get_method = lambda: 'PUT'
-    res = urllib.request.urlopen(req)
+    req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
+    #req.add_header('Authorization',"OAuth " + ACCESS_TOKEN)
+    req.get_method = lambda: 'PATCH'
+    res =''
+    try:
+        res = urllib.request.urlopen(req)
+    except urllib.error.HTTPError as e:
+        print(e.read())
+        print(e.read().decode())
+        print(res.read())
     return res.read()
 
+def GetGameId(name):
+    #data = urllib.parse.urlencode(name).encode("utf-8")
+    req = urllib.request.Request('https://api.twitch.tv/helix/games?name=' + urllib.parse.quote(name))
+    req.add_header('Client-ID', CLIENT_ID)
+    req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
+    req.get_method = lambda: 'GET'
+    res = urllib.request.urlopen(req)
+    str_data = res.read().decode('utf-8')
+    json_data = json.loads(str_data)
+    return json_data['data'][0]['id']
+
 def UpdateTitle(newTitle):
-    channel = json.loads(UpdateChannel({'channel[status]' : newTitle}))
-    s.send(("PRIVMSG #link_7777 :Title Changed to %s\r\n" % (channel["status"])).encode("utf-8"))
+    UpdateChannel({'title' : newTitle})
+    GetTitle()
 
 def UpdateGame(newGame):
-    channel = json.loads(UpdateChannel({'channel[game]' : newGame}))
-    s.send(("PRIVMSG #link_7777 :Game Changed to %s\r\n" % (channel["game"])).encode("utf-8"))
+    game_id = GetGameId(newGame)
+    UpdateChannel({'game_id' : game_id})
+    GetGame()
 
 def getChannelByID(userID):
     req = urllib.request.Request('https://api.twitch.tv/kraken/channels/' + userID)
@@ -1803,7 +1989,16 @@ screen = pygame.display.set_mode((350,0)) #create a screen
 
 bitnes = BitNesCollection(bitInfo['link_7777_total_bits'])
 
-RequestFollowerNotifications()
+AppAccessToken = GetAppAccessToken();
+NewRequestNotifications('channel.follow')
+NewRequestNotifications('channel.subscribe')
+NewRequestNotifications('channel.subscription.gift')
+NewRequestNotifications('channel.subscription.message')
+NewRequestNotifications('channel.cheer')
+NewRequestNotifications('channel.raid')
+NewRequestNotifications('channel.hype_train.begin')
+NewRequestNotifications('channel.hype_train.progress')
+NewRequestNotifications('channel.hype_train.end')
 
 while 1:
     clock.tick(8)
