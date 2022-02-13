@@ -66,7 +66,7 @@ class TwitchRequestHandler(http.server.BaseHTTPRequestHandler):
         for item in header:
             header_dict[item[0]] = item[1]
         #jsonhead = json.loads(header)
-        if(header_dict['Twitch-Eventsub-Message-Type']):
+        if('Twitch-Eventsub-Message-Type' in header_dict):
             jsondata = json.loads(data)
             print(jsondata)
 
@@ -100,7 +100,7 @@ class TwitchRequestHandler(http.server.BaseHTTPRequestHandler):
                     count = jsondata['event']['total']
                     tier = jsondata['event']['tier']
                     print("New Sub Gift %s %s %s\n" % (gifter, count, tier))
-                    bitnes.add_notification([gifter, " gifted %s tier %s subs" + (count, tier)])
+                    bitnes.add_notification([gifter, " gifted %s tier %s subs" % (count, tier)])
                     follow_message = "PRIVMSG #link_7777 :%s gifted %s tier %s subs!\r\n" % (gifter, count, tier)
                     s.send(follow_message.encode("utf-8"))
                 elif(header_dict['Twitch-Eventsub-Subscription-Type'] == 'channel.subscription.message'):
@@ -117,7 +117,7 @@ class TwitchRequestHandler(http.server.BaseHTTPRequestHandler):
                     bits = jsondata['event']['bits']
                     print("New Cheer %s %s\n" % (cheerer, bits))
                     UpdateBits(jsondata['subscription']['created_at'], cheerer, bits)
-                elif(header_dict['Twitch-Eventsub-Message-Type'] == 'channel.raid'):
+                elif(header_dict['Twitch-Eventsub-Subscription-Type'] == 'channel.raid'):
                     raider = jsondata['event']['from_broadcaster_user_name']
                     viewers = jsondata['event']['viewers']
                     print("New Raid %s %s\n" % (raider, viewers))
@@ -978,13 +978,13 @@ class SearchThread (threading.Thread):
                     tmpLiveList = {}
                     #print(theGame['game'])
                     search_result = SearchGame(theGame['game'])
-                    #print(search_result['streams'])
+                    #print(search_result)
                     #if 'channel' in search_result:
-                    if 'streams' in search_result:
-                        for chan in search_result['streams']:
+                    if search_result['data']:
+                        for chan in search_result['data']:
                             #print(chan)
-                            if repr(str(theGame['game'])) == repr(chan['channel']['game']):
-                                tmpLiveList[repr(chan['channel']['display_name'])] = repr(chan['channel']['game'])
+                            if repr(str(theGame['game'])) == repr(chan['game_name']):
+                                tmpLiveList[repr(chan['display_name'])] = repr(chan['game_name'])
                                 #print("%s %s\n" % (repr(chan['channel']['display_name']), repr(chan['channel']['game'])))
                         for name in tmpLiveList:
                             #print("LiveAlertList:")
@@ -1274,7 +1274,7 @@ class BitNesCollection:
     def subscriptionTick(self):
         self.subscriptionTimeout -= 1
         if self.subscriptionTimeout == 0:
-            NewRequestNotifications()
+            RenewRequestNotifications()
             self.subscriptionTimeout = 604800*8
 
     def mute(self):
@@ -1865,50 +1865,41 @@ def UpdateGame(newGame):
     GetGame()
 
 def getChannelByID(userID):
-    req = urllib.request.Request('https://api.twitch.tv/kraken/channels/' + userID)
-    req.add_header('Accept','application/vnd.twitchtv.v5+json')
+    req = urllib.request.Request('https://api.twitch.tv/helix/channels?broadcaster_id=' + urllib.parse.quote(userID))
     req.add_header('Client-ID', CLIENT_ID)
     req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
+    req.get_method = lambda: 'GET'
     res = urllib.request.urlopen(req)
-    return res.read()
+    #print(res.read())
+    return res.read().decode('utf-8')
 
 def GetGame():
     channel = json.loads(getChannelByID(USER_ID))
-    s.send(("PRIVMSG #link_7777 :Current Game: %s\r\n" % (channel["game"])).encode("utf-8"))
+    s.send(("PRIVMSG #link_7777 :Current Game: %s\r\n" % (channel["data"][0]["game_name"])).encode("utf-8"))
 
 def GetTitle():
     channel = json.loads(getChannelByID(USER_ID))
-    s.send(("PRIVMSG #link_7777 :Current Title: %s\r\n" % (channel["status"])).encode("utf-8"))
-    #users = GetUsers()
-    #print(users)
-
-def GetDisplayName(userID):
-    channel = json.loads(getChannelByID(userID))
     print(channel)
-    return channel["display_name"]
+    s.send(("PRIVMSG #link_7777 :Current Title: %s\r\n" % (channel["data"][0]["title"])).encode("utf-8"))
 
 def GetStream():
-    req = urllib.request.Request('https://api.twitch.tv/kraken/streams/' + USER_ID)
-    req.add_header('Accept','application/vnd.twitchtv.v5+json')
-    req.add_header('Client-ID',CLIENT_ID)
+    req = urllib.request.Request('https://api.twitch.tv/helix/streams?user_id=' + urllib.parse.quote(USER_ID))
+    req.add_header('Client-ID', CLIENT_ID)
     req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
+    req.get_method = lambda: 'GET'
     res = urllib.request.urlopen(req)
-    return res.read()
-
-def GetUsers():
-    req = urllib.request.Request('https://api.twitch.tv/kraken/users/' + USER_ID)
-    req.add_header('Accept','application/vnd.twitchtv.v5+json')
-    req.add_header('Client-ID',CLIENT_ID)
-    req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
-    res = urllib.request.urlopen(req)
-    return res.read()
+    return res.read().decode('utf-8')
 
 def GetTime():
     stream = json.loads(GetStream())
-    if stream["stream"] == None:
+    print(stream)
+    if not stream["data"]:
         return None
+
+    if stream["data"][0]["type"] == "live":
+        return stream["data"][0]["stream"]["started_at"]
     else:
-        return stream["stream"]["created_at"]
+        return None
 
 def UpdateBits(epoch, user, count):
     global bitnes
@@ -1938,17 +1929,18 @@ def LogBits(epoch, user, count):
     bitLog.close()
 
 def SearchGame(game):
-    req = urllib.request.Request('https://api.twitch.tv/kraken/search/streams?query=' + urllib.parse.quote_plus(game))
-    req.add_header('Accept','application/vnd.twitchtv.v5+json')
-    req.add_header('Client-ID',CLIENT_ID)
+    req = urllib.request.Request('https://api.twitch.tv/helix/search/channels?query=' + urllib.parse.quote_plus(game) + '&live_only=true')
+    print(req)
+    req.add_header('Client-ID', CLIENT_ID)
     req.add_header('Authorization',"Bearer " + ACCESS_TOKEN)
+    req.get_method = lambda: 'GET'
     try:
         res = urllib.request.urlopen(req)
     except:
         error = sys.exc_info()[0]
         print("Search Failed: " + repr(error))
         return json.loads("{}")
-    return json.loads(res.read())
+    return json.loads(res.read().decode('utf-8'))
 
 def LiveAlertCheck():
     global LiveAlertTimeout
@@ -1968,15 +1960,6 @@ def SendLiveAlertMessage(message):
 
 LiveAlertTimeout = 1
 LiveAlertCheck()
-#searchResults = SearchGame('Super Glove Ball')
-#for chan in searchResults['streams']:
-#    print("%s %s\n" % (chan['channel']['display_name'], chan['channel']['game']))
-
-#req = urllib.request.Request('https://api.twitch.tv/kraken/search/channels?query=zelda')
-#req.add_header('Accept','application/vnd.twitchtv.v5+json')
-#req.add_header('Client-ID',CLIENT_ID)
-#res = urllib.request.urlopen(req)
-#print(res.read())
 
 
 LoadBitInfo()
@@ -1987,18 +1970,24 @@ clock = pygame.time.Clock()
 
 screen = pygame.display.set_mode((350,0)) #create a screen
 
+pygame.display.set_caption("BitNES")
+
 bitnes = BitNesCollection(bitInfo['link_7777_total_bits'])
 
 AppAccessToken = GetAppAccessToken();
-NewRequestNotifications('channel.follow')
-NewRequestNotifications('channel.subscribe')
-NewRequestNotifications('channel.subscription.gift')
-NewRequestNotifications('channel.subscription.message')
-NewRequestNotifications('channel.cheer')
-NewRequestNotifications('channel.raid')
-NewRequestNotifications('channel.hype_train.begin')
-NewRequestNotifications('channel.hype_train.progress')
-NewRequestNotifications('channel.hype_train.end')
+
+def RenewRequestNotifications():
+     NewRequestNotifications('channel.follow')
+     NewRequestNotifications('channel.subscribe')
+     NewRequestNotifications('channel.subscription.gift')
+     NewRequestNotifications('channel.subscription.message')
+     NewRequestNotifications('channel.cheer')
+     NewRequestNotifications('channel.raid')
+     NewRequestNotifications('channel.hype_train.begin')
+     NewRequestNotifications('channel.hype_train.progress')
+     NewRequestNotifications('channel.hype_train.end')
+
+RenewRequestNotifications();
 
 while 1:
     clock.tick(8)
